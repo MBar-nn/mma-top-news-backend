@@ -5,14 +5,17 @@ app:
       - http://localhost:4200
   security:
     jwt:
-      secret: ${JWT_SECRET:your-very-long-secret-key-here-minimum-256-bits}
-      expiration: 86400000 # 24 godziny
+      secret: "b7f9c3e1a8d6e4c7b2a9f6d3e1c5b8a7f2c9d6e3b1a4d4f8c2a7e9b1f3c6a5d2"
+      accessTokenExpirationSec: 900   # 15 minut
+      refreshTokenExpirationSec: 604800 # 7 dni
 
 server:
   port: 8080
   servlet:
     session:
       timeout: 30m
+      cookie:
+        secure: true
   error:
     include-stacktrace: never
     include-message: always
