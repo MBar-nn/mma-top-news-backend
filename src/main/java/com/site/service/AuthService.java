@@ -4,9 +4,11 @@ import com.site.dto.auth.LoginRequest;
 import com.site.dto.auth.LoginResponse;
 import com.site.dto.auth.RegisterRequest;
 import com.site.dto.auth.RegisterResponse;
+import com.site.model.ExpiredRefreshToken;
 import com.site.model.Role;
 import com.site.model.User;
 import com.site.model.UserRole;
+import com.site.repository.ExpiredRefreshTokenRepository;
 import com.site.repository.RoleRepository;
 import com.site.repository.UserRepository;
 import jakarta.servlet.http.Cookie;
@@ -23,8 +25,11 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 @Service
@@ -35,16 +40,20 @@ public class AuthService {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
+    private final ExpiredRefreshTokenRepository expiredTokenRepository;
 
     public AuthService(AuthenticationManager authManager, JwtService jwtService,
-                       UserRepository userRepository, RoleRepository roleRepository, PasswordEncoder passwordEncoder) {
+                       UserRepository userRepository, RoleRepository roleRepository,
+                       PasswordEncoder passwordEncoder, ExpiredRefreshTokenRepository expiredTokenRepository) {
         this.authManager = authManager;
         this.jwtService = jwtService;
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.passwordEncoder = passwordEncoder;
+        this.expiredTokenRepository = expiredTokenRepository;
     }
 
+    @Transactional
     public ResponseEntity<LoginResponse> login(LoginRequest request, HttpServletResponse response) {
         try {
             Authentication auth = authManager.authenticate(
@@ -88,34 +97,51 @@ public class AuthService {
         }
     }
 
+    @Transactional
     public ResponseEntity<LoginResponse> refresh(HttpServletRequest request, HttpServletResponse response) {
         String refreshToken = extractCookie(request, "REFRESH_TOKEN");
-        if (refreshToken == null || !jwtService.isTokenValid(refreshToken, "refresh")) {
+
+        if (refreshToken == null) {
             clearCookies(response);
-            return ResponseEntity.status(401).body(new LoginResponse("Invalid refresh token"));
+            return ResponseEntity.status(401).body(new LoginResponse("Brak refresh token"));
+        }
+
+        // Sprawdź czy token jest na liście wygasłych/unieważnionych
+        if (expiredTokenRepository.existsByRefreshToken(refreshToken)) {
+            clearCookies(response);
+            return ResponseEntity.status(401).body(new LoginResponse("Token został unieważniony"));
+        }
+
+        // Walidacja tokenu
+        if (!jwtService.isTokenValid(refreshToken, "refresh")) {
+            clearCookies(response);
+            return ResponseEntity.status(401).body(new LoginResponse("Nieprawidłowy refresh token"));
         }
 
         var jws = jwtService.parseToken(refreshToken);
         Long userId = Long.valueOf(jws.getBody().getSubject());
         String createdAtStr = jws.getBody().get("createdAt", String.class);
-        System.out.println(createdAtStr);
         Instant createdAt = Instant.parse(createdAtStr);
 
         var userOpt = userRepository.findById(userId);
         if (userOpt.isEmpty()) {
             clearCookies(response);
-            return ResponseEntity.status(401).body(new LoginResponse("User not found"));
+            return ResponseEntity.status(401).body(new LoginResponse("Użytkownik nie znaleziony"));
         }
 
         User user = userOpt.get();
-        if(user.getPasswordUpdatedAt() != null) {
-            if (createdAt.isBefore(user.getPasswordUpdatedAt())) {
-                clearCookies(response);
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                        .body(new LoginResponse("Refresh token invalid"));
-            }
+
+        // Sprawdź czy hasło zostało zmienione po wydaniu tokenu
+        if (user.getPasswordUpdatedAt() != null && createdAt.isBefore(user.getPasswordUpdatedAt())) {
+            // Dodaj stary token do listy wygasłych
+            invalidateRefreshToken(refreshToken, user, "password_changed");
+            clearCookies(response);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new LoginResponse("Token nieważny - hasło zostało zmienione"));
         }
 
+        // Dodaj stary token do listy wygasłych (rotacja tokenów)
+        invalidateRefreshToken(refreshToken, user, "rotated");
 
         List<String> roleNamesStr = user.getUserRoles().stream()
                 .map(role -> role.getRole().getRoleName())
@@ -146,19 +172,31 @@ public class AuthService {
         return ResponseEntity.ok(new LoginResponse("Token odświeżony"));
     }
 
-    public ResponseEntity<LoginResponse> logout(HttpServletResponse response) {
+    @Transactional
+    public ResponseEntity<LoginResponse> logout(HttpServletRequest request, HttpServletResponse response) {
+        String refreshToken = extractCookie(request, "REFRESH_TOKEN");
+
+        if (refreshToken != null && jwtService.isTokenValid(refreshToken, "refresh")) {
+            var jws = jwtService.parseToken(refreshToken);
+            Long userId = Long.valueOf(jws.getBody().getSubject());
+
+            userRepository.findById(userId).ifPresent(user ->
+                    invalidateRefreshToken(refreshToken, user, "logout")
+            );
+        }
+
         clearCookies(response);
         return ResponseEntity.ok(new LoginResponse("Wylogowano"));
     }
 
-
+    @Transactional
     public ResponseEntity<RegisterResponse> register(RegisterRequest request, HttpServletResponse response) {
         if (userRepository.findByEmail(request.email()).isPresent()) {
             return ResponseEntity.badRequest()
                     .body(new RegisterResponse("Użytkownik o tym e-mailu już istnieje"));
         }
 
-        Role role = roleRepository.findByRoleName("ROLE_ADMIN")
+        Role role = roleRepository.findByRoleName("ROLE_CREATOR")
                 .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono roli"));
 
         String hashed = passwordEncoder.encode(request.password());
@@ -183,6 +221,32 @@ public class AuthService {
     // Pomocnicze metody prywatne
     // ====================================
 
+    private void invalidateRefreshToken(String token, User user, String reason) {
+        try {
+            var jws = jwtService.parseToken(token);
+            OffsetDateTime expiredAt = jws.getBody().getExpiration()
+                    .toInstant()
+                    .atOffset(ZoneOffset.UTC);
+            OffsetDateTime issuedAt = jws.getBody().getIssuedAt()
+                    .toInstant()
+                    .atOffset(ZoneOffset.UTC);
+
+            ExpiredRefreshToken expiredToken = ExpiredRefreshToken.builder()
+                    .user(user)
+                    .refreshToken(token)
+                    .issuedAt(issuedAt)
+                    .expiredAt(expiredAt)
+                    .invalidatedAt(OffsetDateTime.now(ZoneOffset.UTC))
+                    .reason(reason)
+                    .build();
+
+            expiredTokenRepository.save(expiredToken);
+        } catch (Exception e) {
+            // Log błędu, ale nie przerywaj procesu
+            System.err.println("Błąd podczas dodawania tokenu do listy wygasłych: " + e.getMessage());
+        }
+    }
+
     private static String extractCookie(HttpServletRequest request, String name) {
         if (request.getCookies() == null) return null;
         for (Cookie c : request.getCookies()) {
@@ -203,7 +267,7 @@ public class AuthService {
                 .httpOnly(true)
                 .secure(true)
                 .sameSite("Strict")
-                .path("/api/auth/refresh")
+                .path("/api/public/auth/refresh")
                 .maxAge(0)
                 .build();
 
