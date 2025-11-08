@@ -175,6 +175,7 @@ public class AuthService {
     @Transactional
     public ResponseEntity<LoginResponse> logout(HttpServletRequest request, HttpServletResponse response) {
         String refreshToken = extractCookie(request, "REFRESH_TOKEN");
+        System.out.println(refreshToken);
 
         if (refreshToken != null && jwtService.isTokenValid(refreshToken, "refresh")) {
             var jws = jwtService.parseToken(refreshToken);
@@ -196,7 +197,7 @@ public class AuthService {
                     .body(new RegisterResponse("Użytkownik o tym e-mailu już istnieje"));
         }
 
-        Role role = roleRepository.findByRoleName("ROLE_CREATOR")
+        Role role = roleRepository.findByRoleName("ROLE_ADMIN")
                 .orElseThrow(() -> new IllegalArgumentException("Nie znaleziono roli"));
 
         String hashed = passwordEncoder.encode(request.password());
