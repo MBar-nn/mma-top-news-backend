@@ -12,7 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/public/auth")
+@RequestMapping("/api")
 public class AuthController {
 
     private final AuthService authService;
@@ -21,28 +21,29 @@ public class AuthController {
         this.authService = authService;
     }
 
-    @PostMapping("/login")
+    @PostMapping("/public/login")
     public ResponseEntity<LoginResponse> login(
             @Valid @RequestBody LoginRequest request,
             HttpServletResponse response) {
         return authService.login(request, response);
     }
 
-    @PostMapping("/register")
+    @PostMapping("/public/register")
     public ResponseEntity<RegisterResponse> register(
             @Valid @RequestBody RegisterRequest request,
             HttpServletResponse response) {
         return authService.register(request, response);
     }
 
-    @PostMapping("/refresh")
+    @PostMapping("/public/auth/refresh")
     public ResponseEntity<LoginResponse> refresh(
             HttpServletRequest request,
             HttpServletResponse response) {
+
         return authService.refresh(request, response);
     }
 
-    @PostMapping("/logout")
+    @PostMapping("/public/auth/logout")
     public ResponseEntity<LoginResponse> logout(
             HttpServletRequest request,
             HttpServletResponse response) {

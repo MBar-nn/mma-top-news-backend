@@ -81,10 +81,13 @@ public class AuthService {
             ResponseCookie refreshCookie = ResponseCookie.from("REFRESH_TOKEN", refreshToken)
                     .httpOnly(true)
                     .secure(true)
-                    .sameSite("Lax")
-                    .path("/api/public/auth/refresh")
+                    .sameSite("Strict")
+                    .path("/api/public/auth")
                     .maxAge(604800)
                     .build();
+
+            System.out.println(accessCookie.toString());
+            System.out.println(refreshCookie.toString());
 
             response.addHeader(HttpHeaders.SET_COOKIE, accessCookie.toString());
             response.addHeader(HttpHeaders.SET_COOKIE, refreshCookie.toString());
@@ -162,7 +165,7 @@ public class AuthService {
                 .httpOnly(true)
                 .secure(true)
                 .sameSite("Strict")
-                .path("/api/public/auth/refresh")
+                .path("/api/public/auth")
                 .maxAge(604800)
                 .build();
 
@@ -241,6 +244,7 @@ public class AuthService {
                     .reason(reason)
                     .build();
 
+            System.out.println("Refresh token"+expiredToken.getRefreshToken());
             expiredTokenRepository.save(expiredToken);
         } catch (Exception e) {
             // Log błędu, ale nie przerywaj procesu
@@ -268,7 +272,7 @@ public class AuthService {
                 .httpOnly(true)
                 .secure(true)
                 .sameSite("Strict")
-                .path("/api/public/auth/refresh")
+                .path("/api/public/auth")
                 .maxAge(0)
                 .build();
 

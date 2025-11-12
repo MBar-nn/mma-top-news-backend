@@ -6,7 +6,7 @@ app:
   security:
     jwt:
       secret: "b7f9c3e1a8d6e4c7b2a9f6d3e1c5b8a7f2c9d6e3b1a4d4f8c2a7e9b1f3c6a5d2"
-      accessTokenExpirationSec: 900   # 15 min
+      accessTokenExpirationSec: 60 #900   # 15 min
       refreshTokenExpirationSec: 43200 # 12 h
 
 server:
